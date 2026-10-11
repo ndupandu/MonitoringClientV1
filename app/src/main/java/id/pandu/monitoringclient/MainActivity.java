@@ -14,6 +14,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
 import android.webkit.CookieManager;
+import android.webkit.GeolocationPermissions;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.SslErrorHandler;
@@ -36,12 +37,15 @@ public class MainActivity extends Activity {
     private static final int REQ_START = 10;
     private static final int REQ_CAMERA_WEB = 11;
     private static final int REQ_FILE = 12;
+    private static final int REQ_GEO = 13;
     private static final String CHANNEL = "alerts";
 
     private WebView web;
     private String appUrl;
     private String appHost;
     private PermissionRequest pendingWeb;
+    private String pendingGeoOrigin;
+    private GeolocationPermissions.Callback pendingGeoCb;
     private ValueCallback<Uri[]> fileCallback;
     private Uri cameraUri;
     private int notifId = 1;
@@ -72,6 +76,8 @@ public class MainActivity extends Activity {
 
         List<String> need = new ArrayList<>();
         if (!has(Manifest.permission.CAMERA)) need.add(Manifest.permission.CAMERA);
+        if (!has(Manifest.permission.ACCESS_FINE_LOCATION)) need.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        if (!has(Manifest.permission.ACCESS_COARSE_LOCATION)) need.add(Manifest.permission.ACCESS_COARSE_LOCATION);
         if (Build.VERSION.SDK_INT >= 33 && !has(Manifest.permission.POST_NOTIFICATIONS)) {
             need.add(Manifest.permission.POST_NOTIFICATIONS);
         }
@@ -93,7 +99,17 @@ public class MainActivity extends Activity {
                     p.deny();
                 }
             }
+        } else if (code == REQ_GEO) {
+            GeolocationPermissions.Callback cb = pendingGeoCb;
+            String origin = pendingGeoOrigin;
+            pendingGeoCb = null;
+            pendingGeoOrigin = null;
+            if (cb != null) cb.invoke(origin, hasLocation(), false);
         }
+    }
+
+    private boolean hasLocation() {
+        return has(Manifest.permission.ACCESS_FINE_LOCATION) || has(Manifest.permission.ACCESS_COARSE_LOCATION);
     }
 
     // ---------- WebView ----------
@@ -103,6 +119,7 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setAllowFileAccess(false);
+        s.setGeolocationEnabled(true);
         s.setUserAgentString(s.getUserAgentString() + " MonitoringClientApp/1.0");
         CookieManager.getInstance().setAcceptCookie(true);
         web.addJavascriptInterface(new Bridge(), "AndroidApp");
@@ -153,6 +170,25 @@ public class MainActivity extends Activity {
                         if (pendingWeb != null) pendingWeb.deny();
                         pendingWeb = request;
                         requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_CAMERA_WEB);
+                    }
+                });
+            }
+
+            // lokasi / GPS dari halaman web (hanya untuk domain dashboard)
+            @Override
+            public void onGeolocationPermissionsShowPrompt(final String origin, final GeolocationPermissions.Callback callback) {
+                runOnUiThread(() -> {
+                    String host = Uri.parse(origin).getHost();
+                    if (host == null || !appHost.equalsIgnoreCase(host)) {
+                        callback.invoke(origin, false, false);
+                    } else if (hasLocation()) {
+                        callback.invoke(origin, true, false);
+                    } else {
+                        if (pendingGeoCb != null) pendingGeoCb.invoke(pendingGeoOrigin, false, false);
+                        pendingGeoOrigin = origin;
+                        pendingGeoCb = callback;
+                        requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION}, REQ_GEO);
                     }
                 });
             }
